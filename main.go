@@ -1,15 +1,28 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync/atomic"
+	"chirpy/database"
+
+	"github.com/joho/godotenv"
+	_ "github.com/lib/pq"
 )
 
 func main() {
+	godotenv.Load()
+	dbURL := os.Getenv("DB_URL")
+	db, err := sql.Open("postgres", dbURL)
+	if err != nil {
+		log.Fatal(err)
+	}
+	dbQueries := database.New(db)
 	mux := http.NewServeMux()
 	s := &http.Server{
 		Addr:    ":8080",
@@ -17,11 +30,13 @@ func main() {
 	}
 	hits := &apiConfig{
 		fileserversHits: atomic.Int32{},
+		dbQueries: dbQueries,
 	}
 	mux.HandleFunc("GET /api/healthz", readyhandler)
 	mux.HandleFunc("GET /admin/metrics", hits.hitshandler)
 	mux.HandleFunc("POST /admin/reset", hits.resethandler)
 	mux.HandleFunc("POST /api/validate_chirp", chirpcharhandler)
+	mux.HandleFunc("POST /api/users", usercreatorhandler)
 	handler := http.StripPrefix("/app", http.FileServer(http.Dir(".")))
 	mux.Handle("/app/", hits.middlewareMetricsInc(handler))
 	s.ListenAndServe()
@@ -29,6 +44,7 @@ func main() {
 
 type apiConfig struct {
 	fileserversHits atomic.Int32
+	dbQueries       *database.Queries
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -44,13 +60,13 @@ func readyhandler(w http.ResponseWriter, req *http.Request) {
 }
 func (cfg *apiConfig) hitshandler(w http.ResponseWriter, req *http.Request) {
 	w.Header().Add("Content-Type", "text/html")
-	w.Write([]byte(fmt.Sprintf(`
+	w.Write(fmt.Appendf(nil,`
 	<html>
 		<body>
 			<h1>Welcome, Chirpy Admin</h1>
 			<p>Chirpy has been visited %d times!</p>
 		</body>
-	</html>`, cfg.fileserversHits.Load())))
+	</html>`, cfg.fileserversHits.Load()))
 }
 func (cfg *apiConfig) resethandler(w http.ResponseWriter, req *http.Request) {
 	_ = cfg.fileserversHits.Swap(0)
@@ -107,4 +123,7 @@ func chirpcharhandler(w http.ResponseWriter, r *http.Request) {
 		w.Write(data)
 		return
 	}
+}
+func usercreatorhandler(email string){
+	
 }
