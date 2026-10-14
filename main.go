@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync/atomic"
 )
 
@@ -62,7 +63,7 @@ func chirpcharhandler(w http.ResponseWriter, r *http.Request) {
 		Err string `json:"error"`
 	}
 	type val struct {
-		Val bool `json:"valid"`
+		Val string `json:"cleaned_body"`
 	}
 	decoerr := json.NewDecoder(r.Body)
 	bode := body{}
@@ -87,7 +88,17 @@ func chirpcharhandler(w http.ResponseWriter, r *http.Request) {
 		w.Write(data)
 		return
 	} else {
-		data, err := json.Marshal(val{Val: true})
+		tune := []string{"kerfuffle", "sharbert", "fornax"}
+		splitbod := strings.Split(bode.Body, " ")
+		for i := range splitbod {
+			for _, j := range tune {
+				if strings.ToLower(splitbod[i]) == j {
+					splitbod[i] = "****"
+				}
+			}
+		}
+		al := val{Val: strings.Join(splitbod, " ")}
+		data, err := json.Marshal(al)
 		if err != nil {
 			log.Printf("Error marshalling JSON: %s", err)
 			return
