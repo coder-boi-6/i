@@ -1,6 +1,7 @@
 package main
 
 import (
+	"chirpy/database"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -9,15 +10,17 @@ import (
 	"os"
 	"strings"
 	"sync/atomic"
-	"chirpy/database"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 )
 
 func main() {
-	godotenv.Load()
+	log.Print(godotenv.Load())
 	dbURL := os.Getenv("DB_URL")
+	platform := os.Getenv("platform")
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		log.Fatal(err)
@@ -30,13 +33,14 @@ func main() {
 	}
 	hits := &apiConfig{
 		fileserversHits: atomic.Int32{},
-		dbQueries: dbQueries,
+		dbQueries:       dbQueries,
+		platform:        platform,
 	}
 	mux.HandleFunc("GET /api/healthz", readyhandler)
 	mux.HandleFunc("GET /admin/metrics", hits.hitshandler)
 	mux.HandleFunc("POST /admin/reset", hits.resethandler)
 	mux.HandleFunc("POST /api/validate_chirp", chirpcharhandler)
-	mux.HandleFunc("POST /api/users", usercreatorhandler)
+	mux.HandleFunc("POST /api/users", hits.usercreatorhandler)
 	handler := http.StripPrefix("/app", http.FileServer(http.Dir(".")))
 	mux.Handle("/app/", hits.middlewareMetricsInc(handler))
 	s.ListenAndServe()
@@ -45,6 +49,7 @@ func main() {
 type apiConfig struct {
 	fileserversHits atomic.Int32
 	dbQueries       *database.Queries
+	platform        string
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -60,7 +65,7 @@ func readyhandler(w http.ResponseWriter, req *http.Request) {
 }
 func (cfg *apiConfig) hitshandler(w http.ResponseWriter, req *http.Request) {
 	w.Header().Add("Content-Type", "text/html")
-	w.Write(fmt.Appendf(nil,`
+	w.Write(fmt.Appendf(nil, `
 	<html>
 		<body>
 			<h1>Welcome, Chirpy Admin</h1>
@@ -68,15 +73,34 @@ func (cfg *apiConfig) hitshandler(w http.ResponseWriter, req *http.Request) {
 		</body>
 	</html>`, cfg.fileserversHits.Load()))
 }
-func (cfg *apiConfig) resethandler(w http.ResponseWriter, req *http.Request) {
+func (cfg *apiConfig) resethandler(w http.ResponseWriter, r *http.Request) {
+	if cfg.platform != "dev" {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
 	_ = cfg.fileserversHits.Swap(0)
+	err := cfg.dbQueries.DeleteAllUsers(r.Context())
+	if err != nil {
+		log.Print(err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }
+
+type erro struct {
+	Err string `json:"error"`
+}
+type User struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Email     string    `json:"email"`
+}
+
 func chirpcharhandler(w http.ResponseWriter, r *http.Request) {
 	type body struct {
 		Body string `json:"body"`
-	}
-	type erro struct {
-		Err string `json:"error"`
 	}
 	type val struct {
 		Val string `json:"cleaned_body"`
@@ -85,7 +109,7 @@ func chirpcharhandler(w http.ResponseWriter, r *http.Request) {
 	bode := body{}
 	err := decoerr.Decode(&bode)
 	if err != nil {
-		data, err := json.Marshal(erro{Err: "smth errored out bri"})
+		data, err := json.Marshal(erro{Err: err.Error()})
 		if err != nil {
 			log.Printf("Error marshalling JSON: %s", err)
 			return
@@ -124,6 +148,52 @@ func chirpcharhandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 }
-func usercreatorhandler(email string){
-	
+func (cfg *apiConfig) usercreatorhandler(w http.ResponseWriter, r *http.Request) {
+	type em5i1 struct {
+		Email string `json:"email"`
+	}
+	decoerr := json.NewDecoder(r.Body)
+	bode := em5i1{}
+	err := decoerr.Decode(&bode)
+	if err != nil {
+		data, err := json.Marshal(erro{Err: err.Error()})
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			return
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write(data)
+		return
+	}
+	ooser, err := cfg.dbQueries.CreateUser(r.Context(), bode.Email)
+	if err != nil {
+		data, err := json.Marshal(erro{Err: err.Error()})
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write(data)
+		return
+	}
+	oos3r := User{
+		ID:        ooser.ID,
+		CreatedAt: ooser.CreatedAt,
+		UpdatedAt: ooser.UpdatedAt,
+		Email:     ooser.Email,
+	}
+	data, err := json.Marshal(oos3r)
+	if err != nil {
+		data, err := json.Marshal(erro{Err: err.Error()})
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write(data)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	w.Write(data)
 }
