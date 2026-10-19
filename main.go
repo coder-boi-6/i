@@ -39,8 +39,10 @@ func main() {
 	mux.HandleFunc("GET /api/healthz", readyhandler)
 	mux.HandleFunc("GET /admin/metrics", hits.hitshandler)
 	mux.HandleFunc("POST /admin/reset", hits.resethandler)
-	mux.HandleFunc("POST /api/validate_chirp", chirpcharhandler)
+	mux.HandleFunc("POST /api/chirps", hits.chirpcreatorhandler)
 	mux.HandleFunc("POST /api/users", hits.usercreatorhandler)
+	mux.HandleFunc("GET /api/chirps", hits.chirpsgetter)
+	mux.HandleFunc("GET /api/chirps/{chirpID}",hits.chirpgetter)
 	handler := http.StripPrefix("/app", http.FileServer(http.Dir(".")))
 	mux.Handle("/app/", hits.middlewareMetricsInc(handler))
 	s.ListenAndServe()
@@ -63,7 +65,7 @@ func readyhandler(w http.ResponseWriter, req *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("OK"))
 }
-func (cfg *apiConfig) hitshandler(w http.ResponseWriter, req *http.Request) {
+func (cfg *apiConfig) hitshandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Add("Content-Type", "text/html")
 	w.Write(fmt.Appendf(nil, `
 	<html>
@@ -97,10 +99,19 @@ type User struct {
 	UpdatedAt time.Time `json:"updated_at"`
 	Email     string    `json:"email"`
 }
+type Chirp struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Body      string    `json:"body"`
+	UserID    uuid.UUID `json:"user_id"`
+}
 
-func chirpcharhandler(w http.ResponseWriter, r *http.Request) {
+func (cfg *apiConfig) chirpcreatorhandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
 	type body struct {
-		Body string `json:"body"`
+		Body    string    `json:"body"`
+		User_Id uuid.UUID `json:"user_id"`
 	}
 	type val struct {
 		Val string `json:"cleaned_body"`
@@ -138,12 +149,33 @@ func chirpcharhandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		al := val{Val: strings.Join(splitbod, " ")}
-		data, err := json.Marshal(al)
+		chirp, err := cfg.dbQueries.CreateChirp(r.Context(), database.CreateChirpParams{
+			Body:   al.Val,
+			UserID: bode.User_Id,
+		})
+		if err != nil {
+			data, err := json.Marshal(erro{Err: err.Error()})
+			if err != nil {
+				log.Printf("Error marshalling JSON: %s", err)
+				return
+			}
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write(data)
+			return
+		}
+		mirp := Chirp{
+			ID:        chirp.ID,
+			CreatedAt: chirp.CreatedAt,
+			UpdatedAt: chirp.UpdatedAt,
+			Body:      chirp.Body,
+			UserID:    chirp.UserID,
+		}
+		data, err := json.Marshal(mirp)
 		if err != nil {
 			log.Printf("Error marshalling JSON: %s", err)
 			return
 		}
-		w.WriteHeader(http.StatusOK)
+		w.WriteHeader(http.StatusCreated)
 		w.Write(data)
 		return
 	}
@@ -195,5 +227,76 @@ func (cfg *apiConfig) usercreatorhandler(w http.ResponseWriter, r *http.Request)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
+	w.Write(data)
+}
+func (cfg *apiConfig) chirpsgetter(w http.ResponseWriter, r *http.Request) {
+	chirps, err := cfg.dbQueries.RetrieveAllChirps(r.Context())
+	if err != nil {
+		data, err := json.Marshal(erro{Err: err.Error()})
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write(data)
+		return
+	}
+	ie := []Chirp{}
+	for _, i := range chirps {
+		i := Chirp{
+			ID:        i.ID,
+			CreatedAt: i.CreatedAt,
+			UpdatedAt: i.UpdatedAt,
+			Body:      i.Body,
+			UserID:    i.UserID,
+		}
+		ie = append(ie, i)
+	}
+	data, err := json.Marshal(ie)
+	if err != nil {
+		log.Printf("Error marshalling JSON: %s", err)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	w.Write(data)
+}
+func (cfg *apiConfig) chirpgetter(w http.ResponseWriter, r *http.Request){
+	chirpIDString := r.PathValue("chirpID")
+	id,err:=uuid.Parse(chirpIDString)
+	if err!=nil{
+		data, err := json.Marshal(erro{Err: err.Error()})
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			return
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write(data)
+		return
+	}
+	chirp,err:=cfg.dbQueries.GetChirp(r.Context(),id)
+	if err!=nil{
+		data, err := json.Marshal(erro{Err: err.Error()})
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+		w.Write(data)
+		return
+	}
+	chirpfr := Chirp{
+		ID:        chirp.ID,
+		CreatedAt: chirp.CreatedAt,
+		UpdatedAt: chirp.UpdatedAt,
+		Body:      chirp.Body,
+		UserID:    chirp.UserID,
+	}
+	data, err := json.Marshal(chirpfr)
+	if err != nil {
+		log.Printf("Error marshalling JSON: %s", err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
 	w.Write(data)
 }
