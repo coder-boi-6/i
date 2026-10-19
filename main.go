@@ -1,6 +1,7 @@
 package main
 
 import (
+	"chirpy/auth"
 	"chirpy/database"
 	"database/sql"
 	"encoding/json"
@@ -42,7 +43,8 @@ func main() {
 	mux.HandleFunc("POST /api/chirps", hits.chirpcreatorhandler)
 	mux.HandleFunc("POST /api/users", hits.usercreatorhandler)
 	mux.HandleFunc("GET /api/chirps", hits.chirpsgetter)
-	mux.HandleFunc("GET /api/chirps/{chirpID}",hits.chirpgetter)
+	mux.HandleFunc("GET /api/chirps/{chirpID}", hits.chirpgetter)
+	mux.HandleFunc("POST /api/login", hits.userloginquery)
 	handler := http.StripPrefix("/app", http.FileServer(http.Dir(".")))
 	mux.Handle("/app/", hits.middlewareMetricsInc(handler))
 	s.ListenAndServe()
@@ -105,6 +107,10 @@ type Chirp struct {
 	UpdatedAt time.Time `json:"updated_at"`
 	Body      string    `json:"body"`
 	UserID    uuid.UUID `json:"user_id"`
+}
+type oser struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
 }
 
 func (cfg *apiConfig) chirpcreatorhandler(w http.ResponseWriter, r *http.Request) {
@@ -181,11 +187,8 @@ func (cfg *apiConfig) chirpcreatorhandler(w http.ResponseWriter, r *http.Request
 	}
 }
 func (cfg *apiConfig) usercreatorhandler(w http.ResponseWriter, r *http.Request) {
-	type em5i1 struct {
-		Email string `json:"email"`
-	}
 	decoerr := json.NewDecoder(r.Body)
-	bode := em5i1{}
+	bode := oser{}
 	err := decoerr.Decode(&bode)
 	if err != nil {
 		data, err := json.Marshal(erro{Err: err.Error()})
@@ -197,7 +200,21 @@ func (cfg *apiConfig) usercreatorhandler(w http.ResponseWriter, r *http.Request)
 		w.Write(data)
 		return
 	}
-	ooser, err := cfg.dbQueries.CreateUser(r.Context(), bode.Email)
+	hasj, err := auth.HashPassword(bode.Password)
+	if err != nil {
+		data, err := json.Marshal(erro{Err: err.Error()})
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write(data)
+		return
+	}
+	ooser, err := cfg.dbQueries.CreateUser(r.Context(), database.CreateUserParams{
+		Email:          bode.Email,
+		HashedPassword: hasj,
+	})
 	if err != nil {
 		data, err := json.Marshal(erro{Err: err.Error()})
 		if err != nil {
@@ -260,10 +277,10 @@ func (cfg *apiConfig) chirpsgetter(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	w.Write(data)
 }
-func (cfg *apiConfig) chirpgetter(w http.ResponseWriter, r *http.Request){
+func (cfg *apiConfig) chirpgetter(w http.ResponseWriter, r *http.Request) {
 	chirpIDString := r.PathValue("chirpID")
-	id,err:=uuid.Parse(chirpIDString)
-	if err!=nil{
+	id, err := uuid.Parse(chirpIDString)
+	if err != nil {
 		data, err := json.Marshal(erro{Err: err.Error()})
 		if err != nil {
 			log.Printf("Error marshalling JSON: %s", err)
@@ -273,8 +290,8 @@ func (cfg *apiConfig) chirpgetter(w http.ResponseWriter, r *http.Request){
 		w.Write(data)
 		return
 	}
-	chirp,err:=cfg.dbQueries.GetChirp(r.Context(),id)
-	if err!=nil{
+	chirp, err := cfg.dbQueries.GetChirp(r.Context(), id)
+	if err != nil {
 		data, err := json.Marshal(erro{Err: err.Error()})
 		if err != nil {
 			log.Printf("Error marshalling JSON: %s", err)
@@ -292,6 +309,57 @@ func (cfg *apiConfig) chirpgetter(w http.ResponseWriter, r *http.Request){
 		UserID:    chirp.UserID,
 	}
 	data, err := json.Marshal(chirpfr)
+	if err != nil {
+		log.Printf("Error marshalling JSON: %s", err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(data)
+}
+func (cfg *apiConfig) userloginquery(w http.ResponseWriter, r *http.Request) {
+	decoerr := json.NewDecoder(r.Body)
+	bode := oser{}
+	err := decoerr.Decode(&bode)
+	if err != nil {
+		data, err := json.Marshal(erro{Err: err.Error()})
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			return
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write(data)
+		return
+	}
+	ooser, err := cfg.dbQueries.UserbyEmail(r.Context(), bode.Email)
+	if err != nil {
+		data, err := json.Marshal(erro{Err: "Incorrect email or password"})
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			return
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write(data)
+		return
+	}
+	truth, err := auth.CheckPasswordHash(bode.Password, ooser.HashedPassword)
+	if (err != nil) || (truth == false) {
+		data, err := json.Marshal(erro{Err: "Incorrect email or password"})
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			return
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write(data)
+		return
+	}
+	yut := User{
+		ID:        ooser.ID,
+		CreatedAt: ooser.CreatedAt,
+		UpdatedAt: ooser.UpdatedAt,
+		Email:     ooser.Email,
+	}
+	data, err := json.Marshal(yut)
 	if err != nil {
 		log.Printf("Error marshalling JSON: %s", err)
 		return
