@@ -7,6 +7,7 @@ package database
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -37,10 +38,36 @@ func (q *Queries) CreateChirp(ctx context.Context, arg CreateChirpParams) (Chirp
 	return i, err
 }
 
+const createRefreshRow = `-- name: CreateRefreshRow :one
+insert into refresh_tokens (token,created_at,updated_at,user_id,expires_at)
+values($1,NOW(),NOW(),$2,$3)
+returning token, created_at, updated_at, user_id, expires_at, revoked_at
+`
+
+type CreateRefreshRowParams struct {
+	Token     string
+	UserID    uuid.UUID
+	ExpiresAt time.Time
+}
+
+func (q *Queries) CreateRefreshRow(ctx context.Context, arg CreateRefreshRowParams) (RefreshToken, error) {
+	row := q.db.QueryRowContext(ctx, createRefreshRow, arg.Token, arg.UserID, arg.ExpiresAt)
+	var i RefreshToken
+	err := row.Scan(
+		&i.Token,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.UserID,
+		&i.ExpiresAt,
+		&i.RevokedAt,
+	)
+	return i, err
+}
+
 const createUser = `-- name: CreateUser :one
 INSERT INTO users (id, created_at, updated_at, email,hashed_password)
 VALUES (
-	gen_random_uuid(),NOW(),NOW(),$1,$2
+	gen_random_uuid(),NOW(),NOW(),$1 ,$2
 )
 RETURNING id, created_at, updated_at, email, hashed_password
 `
@@ -123,6 +150,37 @@ func (q *Queries) RetrieveAllChirps(ctx context.Context) ([]Chirp, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const revokeToken = `-- name: RevokeToken :exec
+update refresh_tokens set revoked_at=NOW(),updated_at=NOW()
+where refresh_tokens.token = $1
+`
+
+func (q *Queries) RevokeToken(ctx context.Context, token string) error {
+	_, err := q.db.ExecContext(ctx, revokeToken, token)
+	return err
+}
+
+const userRefreshTokenThing = `-- name: UserRefreshTokenThing :one
+select users.id, users.created_at, users.updated_at, users.email, users.hashed_password
+from users inner join refresh_tokens on users.id = refresh_tokens.user_id
+where refresh_tokens.token=$1
+and revoked_at is null
+and expires_at>NOW()
+`
+
+func (q *Queries) UserRefreshTokenThing(ctx context.Context, token string) (User, error) {
+	row := q.db.QueryRowContext(ctx, userRefreshTokenThing, token)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Email,
+		&i.HashedPassword,
+	)
+	return i, err
 }
 
 const userbyEmail = `-- name: UserbyEmail :one
