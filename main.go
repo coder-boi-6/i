@@ -5,6 +5,7 @@ import (
 	"chirpy/database"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -48,7 +49,9 @@ func main() {
 	mux.HandleFunc("GET /api/chirps/{chirpID}", hits.chirpgetter)
 	mux.HandleFunc("POST /api/login", hits.userloginquery)
 	mux.HandleFunc("POST /api/refresh", hits.refreshtokenquery)
-	mux.HandleFunc("POST /api/revoke",hits.revoketoken)
+	mux.HandleFunc("POST /api/revoke", hits.revoketoken)
+	mux.HandleFunc("PUT /api/users", hits.updateuser)
+	mux.HandleFunc("DELETE /api/chirps/{chirpID}",hits.deletechirp)
 	handler := http.StripPrefix("/app", http.FileServer(http.Dir(".")))
 	mux.Handle("/app/", hits.middlewareMetricsInc(handler))
 	s.ListenAndServe()
@@ -468,7 +471,7 @@ func (cfg *apiConfig) refreshtokenquery(w http.ResponseWriter, r *http.Request) 
 		w.Write(data)
 		return
 	}
-	yumrs:=tokenresp{
+	yumrs := tokenresp{
 		Token: tokenstring,
 	}
 	data, err := json.Marshal(yumrs)
@@ -480,7 +483,7 @@ func (cfg *apiConfig) refreshtokenquery(w http.ResponseWriter, r *http.Request) 
 	w.WriteHeader(http.StatusOK)
 	w.Write(data)
 }
-func (cfg *apiConfig) revoketoken (w http.ResponseWriter, r *http.Request){
+func (cfg *apiConfig) revoketoken(w http.ResponseWriter, r *http.Request) {
 	refreshtoken, err := auth.GetBearerToken(r.Header)
 	if err != nil {
 		data, err := json.Marshal(erro{Err: err.Error()})
@@ -492,8 +495,162 @@ func (cfg *apiConfig) revoketoken (w http.ResponseWriter, r *http.Request){
 		w.Write(data)
 		return
 	}
-	err=cfg.dbQueries.RevokeToken(r.Context(),refreshtoken)
+	err = cfg.dbQueries.RevokeToken(r.Context(), refreshtoken)
 	if err != nil {
+		data, err := json.Marshal(erro{Err: err.Error()})
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write(data)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+func (cfg *apiConfig) updateuser (w http.ResponseWriter, r *http.Request){
+	tokenmaxxing, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		data, err := json.Marshal(erro{Err: err.Error()})
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			return
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write(data)
+		return
+	}
+	decoerr := json.NewDecoder(r.Body)
+	bode := oser{}
+	err = decoerr.Decode(&bode)
+	if err != nil {
+		data, err := json.Marshal(erro{Err: err.Error()})
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			return
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write(data)
+		return
+	}
+	hasj, err := auth.HashPassword(bode.Password)
+	if err != nil {
+		data, err := json.Marshal(erro{Err: err.Error()})
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write(data)
+		return
+	}
+	user_id,err:=auth.ValidateJWT(tokenmaxxing,cfg.secret)
+	if err != nil {
+		data, err := json.Marshal(erro{Err: err.Error()})
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			return
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write(data)
+		return
+	}
+	oozer,err:=cfg.dbQueries.UpdateUser(r.Context(),database.UpdateUserParams{
+		HashedPassword: hasj,
+		Email: bode.Email,
+		ID: user_id,
+	})
+	if err != nil {
+		data, err := json.Marshal(erro{Err: err.Error()})
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write(data)
+		return
+	}
+	yut := User{
+		ID:        oozer.ID,
+		CreatedAt: oozer.CreatedAt,
+		UpdatedAt: oozer.UpdatedAt,
+		Email:     oozer.Email,
+	}
+	data, err := json.Marshal(yut)
+	if err != nil {
+		data, err := json.Marshal(erro{Err: err.Error()})
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write(data)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(data)
+}
+func (cfg *apiConfig) deletechirp (w http.ResponseWriter, r *http.Request){
+	tokenmaxxing, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		data, err := json.Marshal(erro{Err: err.Error()})
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			return
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write(data)
+		return
+	}
+	user_id,err:=auth.ValidateJWT(tokenmaxxing,cfg.secret)
+	if err != nil {
+		data, err := json.Marshal(erro{Err: err.Error()})
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			return
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write(data)
+		return
+	}
+	chirpIDString := r.PathValue("chirpID")
+	id, err := uuid.Parse(chirpIDString)
+	if err != nil {
+		data, err := json.Marshal(erro{Err: err.Error()})
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			return
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write(data)
+		return
+	}
+	_, err = cfg.dbQueries.GetChirp(r.Context(), id)
+	if err != nil {
+		data, err := json.Marshal(erro{Err: err.Error()})
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+		w.Write(data)
+		return
+	}
+	_,err=cfg.dbQueries.DeleteChirp(r.Context(),database.DeleteChirpParams{
+		UserID: user_id,
+		ID: id,
+	})
+	if errors.Is(err,sql.ErrNoRows){
+		data, err := json.Marshal(erro{Err: err.Error()})
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			return
+		}
+		w.WriteHeader(http.StatusForbidden)
+		w.Write(data)
+		return
+	}else if err != nil {
 		data, err := json.Marshal(erro{Err: err.Error()})
 		if err != nil {
 			log.Printf("Error marshalling JSON: %s", err)

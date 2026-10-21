@@ -36,3 +36,12 @@ and expires_at>NOW();
 -- name: RevokeToken :exec
 update refresh_tokens set revoked_at=NOW(),updated_at=NOW()
 where refresh_tokens.token = $1;
+-- name: UpdateUser :one
+update users set hashed_password=$1,email=$2
+where users.id=$3
+returning *;
+-- name: DeleteChirp :one
+delete from chirps
+where user_id=$1
+and id=$2
+returning id;

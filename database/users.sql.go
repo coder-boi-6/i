@@ -99,6 +99,25 @@ func (q *Queries) DeleteAllUsers(ctx context.Context) error {
 	return err
 }
 
+const deleteChirp = `-- name: DeleteChirp :one
+delete from chirps
+where user_id=$1
+and id=$2
+returning id
+`
+
+type DeleteChirpParams struct {
+	UserID uuid.UUID
+	ID     uuid.UUID
+}
+
+func (q *Queries) DeleteChirp(ctx context.Context, arg DeleteChirpParams) (uuid.UUID, error) {
+	row := q.db.QueryRowContext(ctx, deleteChirp, arg.UserID, arg.ID)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
 const getChirp = `-- name: GetChirp :one
 SELECT id, created_at, updated_at, body, user_id FROM chirps
 WHERE id = $1
@@ -160,6 +179,31 @@ where refresh_tokens.token = $1
 func (q *Queries) RevokeToken(ctx context.Context, token string) error {
 	_, err := q.db.ExecContext(ctx, revokeToken, token)
 	return err
+}
+
+const updateUser = `-- name: UpdateUser :one
+update users set hashed_password=$1,email=$2
+where users.id=$3
+returning id, created_at, updated_at, email, hashed_password
+`
+
+type UpdateUserParams struct {
+	HashedPassword string
+	Email          string
+	ID             uuid.UUID
+}
+
+func (q *Queries) UpdateUser(ctx context.Context, arg UpdateUserParams) (User, error) {
+	row := q.db.QueryRowContext(ctx, updateUser, arg.HashedPassword, arg.Email, arg.ID)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Email,
+		&i.HashedPassword,
+	)
+	return i, err
 }
 
 const userRefreshTokenThing = `-- name: UserRefreshTokenThing :one
