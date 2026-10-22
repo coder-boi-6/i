@@ -15,6 +15,7 @@ RETURNING *;
 -- name: RetrieveAllChirps :many
 select *
 from chirps
+where user_id=sqlc.narg('author_id') or sqlc.narg('author_id') is null
 order by created_at asc;
 -- name: GetChirp :one
 SELECT * FROM chirps

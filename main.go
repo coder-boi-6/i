@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -21,9 +22,10 @@ import (
 
 func main() {
 	log.Print(godotenv.Load())
-	dbURL := os.Getenv("DB_URL")
+	dbURL := os.Getenv("db_url")
 	platform := os.Getenv("platform")
 	secret := os.Getenv("secret")
+	polka_key := os.Getenv("polka_key")
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		log.Fatal(err)
@@ -39,6 +41,7 @@ func main() {
 		dbQueries:       dbQueries,
 		platform:        platform,
 		secret:          secret,
+		polka_key:       polka_key,
 	}
 	mux.HandleFunc("GET /api/healthz", readyhandler)
 	mux.HandleFunc("GET /admin/metrics", hits.hitshandler)
@@ -51,8 +54,8 @@ func main() {
 	mux.HandleFunc("POST /api/refresh", hits.refreshtokenquery)
 	mux.HandleFunc("POST /api/revoke", hits.revoketoken)
 	mux.HandleFunc("PUT /api/users", hits.updateuser)
-	mux.HandleFunc("DELETE /api/chirps/{chirpID}",hits.deletechirp)
-	mux.HandleFunc("POST /api/polka/webhooks",hits.upgradechirpyred)
+	mux.HandleFunc("DELETE /api/chirps/{chirpID}", hits.deletechirp)
+	mux.HandleFunc("POST /api/polka/webhooks", hits.upgradechirpyred)
 	handler := http.StripPrefix("/app", http.FileServer(http.Dir(".")))
 	mux.Handle("/app/", hits.middlewareMetricsInc(handler))
 	s.ListenAndServe()
@@ -63,6 +66,7 @@ type apiConfig struct {
 	dbQueries       *database.Queries
 	platform        string
 	secret          string
+	polka_key       string
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -109,7 +113,7 @@ type User struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 	Email     string    `json:"email"`
-	ChirpyRed    bool `json:"is_chirpy_red"`
+	ChirpyRed bool      `json:"is_chirpy_red"`
 }
 type Chirp struct {
 	ID        uuid.UUID `json:"id"`
@@ -279,7 +283,28 @@ func (cfg *apiConfig) usercreatorhandler(w http.ResponseWriter, r *http.Request)
 	w.Write(data)
 }
 func (cfg *apiConfig) chirpsgetter(w http.ResponseWriter, r *http.Request) {
-	chirps, err := cfg.dbQueries.RetrieveAllChirps(r.Context())
+	var err error
+	author_id_ID := uuid.UUID{}
+	author_id := uuid.NullUUID{}
+	author_idstring := r.URL.Query().Get("author_id")
+	if len(author_idstring) == 0 {
+		author_id.Valid = false
+	} else {
+		author_id_ID, err = uuid.Parse(author_idstring)
+		if err != nil {
+			data, err := json.Marshal(erro{Err: err.Error()})
+			if err != nil {
+				log.Printf("Error marshalling JSON: %s", err)
+				return
+			}
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write(data)
+			return
+		}
+		author_id.UUID = author_id_ID
+		author_id.Valid = true
+	}
+	chirps, err := cfg.dbQueries.RetrieveAllChirps(r.Context(), author_id)
 	if err != nil {
 		data, err := json.Marshal(erro{Err: err.Error()})
 		if err != nil {
@@ -300,6 +325,22 @@ func (cfg *apiConfig) chirpsgetter(w http.ResponseWriter, r *http.Request) {
 			UserID:    i.UserID,
 		}
 		ie = append(ie, i)
+	}
+	order := r.URL.Query().Get("sort")
+	if order == "desc" {
+		sort.Slice(ie, func(i, j int) bool {
+			if ie[i].CreatedAt.Before(ie[j].CreatedAt) {
+				return false
+			}
+			return true
+		})
+	} else {
+		sort.Slice(ie, func(i, j int) bool {
+			if ie[i].CreatedAt.Before(ie[j].CreatedAt) {
+				return true
+			}
+			return false
+		})
 	}
 	data, err := json.Marshal(ie)
 	if err != nil {
@@ -512,7 +553,7 @@ func (cfg *apiConfig) revoketoken(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
-func (cfg *apiConfig) updateuser (w http.ResponseWriter, r *http.Request){
+func (cfg *apiConfig) updateuser(w http.ResponseWriter, r *http.Request) {
 	tokenmaxxing, err := auth.GetBearerToken(r.Header)
 	if err != nil {
 		data, err := json.Marshal(erro{Err: err.Error()})
@@ -548,7 +589,7 @@ func (cfg *apiConfig) updateuser (w http.ResponseWriter, r *http.Request){
 		w.Write(data)
 		return
 	}
-	user_id,err:=auth.ValidateJWT(tokenmaxxing,cfg.secret)
+	user_id, err := auth.ValidateJWT(tokenmaxxing, cfg.secret)
 	if err != nil {
 		data, err := json.Marshal(erro{Err: err.Error()})
 		if err != nil {
@@ -559,10 +600,10 @@ func (cfg *apiConfig) updateuser (w http.ResponseWriter, r *http.Request){
 		w.Write(data)
 		return
 	}
-	oozer,err:=cfg.dbQueries.UpdateUser(r.Context(),database.UpdateUserParams{
+	oozer, err := cfg.dbQueries.UpdateUser(r.Context(), database.UpdateUserParams{
 		HashedPassword: hasj,
-		Email: bode.Email,
-		ID: user_id,
+		Email:          bode.Email,
+		ID:             user_id,
 	})
 	if err != nil {
 		data, err := json.Marshal(erro{Err: err.Error()})
@@ -596,7 +637,7 @@ func (cfg *apiConfig) updateuser (w http.ResponseWriter, r *http.Request){
 	w.WriteHeader(http.StatusOK)
 	w.Write(data)
 }
-func (cfg *apiConfig) deletechirp (w http.ResponseWriter, r *http.Request){
+func (cfg *apiConfig) deletechirp(w http.ResponseWriter, r *http.Request) {
 	tokenmaxxing, err := auth.GetBearerToken(r.Header)
 	if err != nil {
 		data, err := json.Marshal(erro{Err: err.Error()})
@@ -608,7 +649,7 @@ func (cfg *apiConfig) deletechirp (w http.ResponseWriter, r *http.Request){
 		w.Write(data)
 		return
 	}
-	user_id,err:=auth.ValidateJWT(tokenmaxxing,cfg.secret)
+	user_id, err := auth.ValidateJWT(tokenmaxxing, cfg.secret)
 	if err != nil {
 		data, err := json.Marshal(erro{Err: err.Error()})
 		if err != nil {
@@ -642,11 +683,11 @@ func (cfg *apiConfig) deletechirp (w http.ResponseWriter, r *http.Request){
 		w.Write(data)
 		return
 	}
-	_,err=cfg.dbQueries.DeleteChirp(r.Context(),database.DeleteChirpParams{
+	_, err = cfg.dbQueries.DeleteChirp(r.Context(), database.DeleteChirpParams{
 		UserID: user_id,
-		ID: id,
+		ID:     id,
 	})
-	if errors.Is(err,sql.ErrNoRows){
+	if errors.Is(err, sql.ErrNoRows) {
 		data, err := json.Marshal(erro{Err: err.Error()})
 		if err != nil {
 			log.Printf("Error marshalling JSON: %s", err)
@@ -655,7 +696,7 @@ func (cfg *apiConfig) deletechirp (w http.ResponseWriter, r *http.Request){
 		w.WriteHeader(http.StatusForbidden)
 		w.Write(data)
 		return
-	}else if err != nil {
+	} else if err != nil {
 		data, err := json.Marshal(erro{Err: err.Error()})
 		if err != nil {
 			log.Printf("Error marshalling JSON: %s", err)
@@ -667,16 +708,20 @@ func (cfg *apiConfig) deletechirp (w http.ResponseWriter, r *http.Request){
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
-func (cfg *apiConfig)  upgradechirpyred(w http.ResponseWriter, r *http.Request){
-	type eventinput struct{
+func (cfg *apiConfig) upgradechirpyred(w http.ResponseWriter, r *http.Request) {
+	type eventinput struct {
 		Event string `json:"event"`
-		Data struct {
+		Data  struct {
 			User_ID string `json:"user_id"`
-		}`json:"data"`
+		} `json:"data"`
+	}
+	polakey, err := auth.GetAPIKey(r.Header)
+	if polakey != cfg.polka_key {
+		w.WriteHeader(http.StatusUnauthorized)
 	}
 	decoerr := json.NewDecoder(r.Body)
 	bode := eventinput{}
-	err := decoerr.Decode(&bode)
+	err = decoerr.Decode(&bode)
 	if err != nil {
 		data, err := json.Marshal(erro{Err: err.Error()})
 		if err != nil {
@@ -687,11 +732,11 @@ func (cfg *apiConfig)  upgradechirpyred(w http.ResponseWriter, r *http.Request){
 		w.Write(data)
 		return
 	}
-	if bode.Event !="user.upgraded"{
+	if bode.Event != "user.upgraded" {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	user_id,err:=uuid.Parse(bode.Data.User_ID)
+	user_id, err := uuid.Parse(bode.Data.User_ID)
 	if err != nil {
 		data, err := json.Marshal(erro{Err: err.Error()})
 		if err != nil {
@@ -702,8 +747,8 @@ func (cfg *apiConfig)  upgradechirpyred(w http.ResponseWriter, r *http.Request){
 		w.Write(data)
 		return
 	}
-	_,err=cfg.dbQueries.UpgradetoChirpyRed(r.Context(),user_id)
-	if errors.Is(err,sql.ErrNoRows){
+	_, err = cfg.dbQueries.UpgradetoChirpyRed(r.Context(), user_id)
+	if errors.Is(err, sql.ErrNoRows) {
 		data, err := json.Marshal(erro{Err: err.Error()})
 		if err != nil {
 			log.Printf("Error marshalling JSON: %s", err)
@@ -712,7 +757,7 @@ func (cfg *apiConfig)  upgradechirpyred(w http.ResponseWriter, r *http.Request){
 		w.WriteHeader(http.StatusNotFound)
 		w.Write(data)
 		return
-	}else if err != nil {
+	} else if err != nil {
 		data, err := json.Marshal(erro{Err: err.Error()})
 		if err != nil {
 			log.Printf("Error marshalling JSON: %s", err)
