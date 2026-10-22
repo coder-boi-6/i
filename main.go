@@ -52,6 +52,7 @@ func main() {
 	mux.HandleFunc("POST /api/revoke", hits.revoketoken)
 	mux.HandleFunc("PUT /api/users", hits.updateuser)
 	mux.HandleFunc("DELETE /api/chirps/{chirpID}",hits.deletechirp)
+	mux.HandleFunc("POST /api/polka/webhooks",hits.upgradechirpyred)
 	handler := http.StripPrefix("/app", http.FileServer(http.Dir(".")))
 	mux.Handle("/app/", hits.middlewareMetricsInc(handler))
 	s.ListenAndServe()
@@ -108,6 +109,7 @@ type User struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 	Email     string    `json:"email"`
+	ChirpyRed    bool `json:"is_chirpy_red"`
 }
 type Chirp struct {
 	ID        uuid.UUID `json:"id"`
@@ -259,6 +261,7 @@ func (cfg *apiConfig) usercreatorhandler(w http.ResponseWriter, r *http.Request)
 		CreatedAt: ooser.CreatedAt,
 		UpdatedAt: ooser.UpdatedAt,
 		Email:     ooser.Email,
+		ChirpyRed: ooser.IsChirpyRed,
 	}
 	data, err := json.Marshal(oos3r)
 	if err != nil {
@@ -365,7 +368,7 @@ func (cfg *apiConfig) userloginquery(w http.ResponseWriter, r *http.Request) {
 		w.Write(data)
 		return
 	}
-	ooser, err := cfg.dbQueries.UserbyEmail(r.Context(), bode.Email)
+	ooser, err := cfg.dbQueries.UserByEmail(r.Context(), bode.Email)
 	if err != nil {
 		data, err := json.Marshal(erro{Err: "Incorrect email or password"})
 		if err != nil {
@@ -392,6 +395,7 @@ func (cfg *apiConfig) userloginquery(w http.ResponseWriter, r *http.Request) {
 		CreatedAt: ooser.CreatedAt,
 		UpdatedAt: ooser.UpdatedAt,
 		Email:     ooser.Email,
+		ChirpyRed: ooser.IsChirpyRed,
 	}
 	token, err := auth.MakeJWT(yut.ID, cfg.secret, time.Hour)
 	if err != nil {
@@ -575,6 +579,7 @@ func (cfg *apiConfig) updateuser (w http.ResponseWriter, r *http.Request){
 		CreatedAt: oozer.CreatedAt,
 		UpdatedAt: oozer.UpdatedAt,
 		Email:     oozer.Email,
+		ChirpyRed: oozer.IsChirpyRed,
 	}
 	data, err := json.Marshal(yut)
 	if err != nil {
@@ -661,4 +666,62 @@ func (cfg *apiConfig) deletechirp (w http.ResponseWriter, r *http.Request){
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+func (cfg *apiConfig)  upgradechirpyred(w http.ResponseWriter, r *http.Request){
+	type eventinput struct{
+		Event string `json:"event"`
+		Data struct {
+			User_ID string `json:"user_id"`
+		}`json:"data"`
+	}
+	decoerr := json.NewDecoder(r.Body)
+	bode := eventinput{}
+	err := decoerr.Decode(&bode)
+	if err != nil {
+		data, err := json.Marshal(erro{Err: err.Error()})
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			return
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write(data)
+		return
+	}
+	if bode.Event !="user.upgraded"{
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	user_id,err:=uuid.Parse(bode.Data.User_ID)
+	if err != nil {
+		data, err := json.Marshal(erro{Err: err.Error()})
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			return
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write(data)
+		return
+	}
+	_,err=cfg.dbQueries.UpgradetoChirpyRed(r.Context(),user_id)
+	if errors.Is(err,sql.ErrNoRows){
+		data, err := json.Marshal(erro{Err: err.Error()})
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+		w.Write(data)
+		return
+	}else if err != nil {
+		data, err := json.Marshal(erro{Err: err.Error()})
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write(data)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+	w.Write([]byte(""))
 }

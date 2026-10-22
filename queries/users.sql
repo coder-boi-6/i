@@ -19,7 +19,7 @@ order by created_at asc;
 -- name: GetChirp :one
 SELECT * FROM chirps
 WHERE id = $1;
--- name: UserbyEmail :one
+-- name: UserByEmail :one
 select *
 from users
 where email = $1;
@@ -45,3 +45,7 @@ delete from chirps
 where user_id=$1
 and id=$2
 returning id;
+-- name: UpgradetoChirpyRed :one
+update users set is_chirpy_red=true
+where users.id=$1
+returning is_chirpy_red;

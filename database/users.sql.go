@@ -69,7 +69,7 @@ INSERT INTO users (id, created_at, updated_at, email,hashed_password)
 VALUES (
 	gen_random_uuid(),NOW(),NOW(),$1 ,$2
 )
-RETURNING id, created_at, updated_at, email, hashed_password
+RETURNING id, created_at, updated_at, email, hashed_password, is_chirpy_red
 `
 
 type CreateUserParams struct {
@@ -86,6 +86,7 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.UpdatedAt,
 		&i.Email,
 		&i.HashedPassword,
+		&i.IsChirpyRed,
 	)
 	return i, err
 }
@@ -184,7 +185,7 @@ func (q *Queries) RevokeToken(ctx context.Context, token string) error {
 const updateUser = `-- name: UpdateUser :one
 update users set hashed_password=$1,email=$2
 where users.id=$3
-returning id, created_at, updated_at, email, hashed_password
+returning id, created_at, updated_at, email, hashed_password, is_chirpy_red
 `
 
 type UpdateUserParams struct {
@@ -202,12 +203,46 @@ func (q *Queries) UpdateUser(ctx context.Context, arg UpdateUserParams) (User, e
 		&i.UpdatedAt,
 		&i.Email,
 		&i.HashedPassword,
+		&i.IsChirpyRed,
+	)
+	return i, err
+}
+
+const upgradetoChirpyRed = `-- name: UpgradetoChirpyRed :one
+update users set is_chirpy_red=true
+where users.id=$1
+returning is_chirpy_red
+`
+
+func (q *Queries) UpgradetoChirpyRed(ctx context.Context, id uuid.UUID) (bool, error) {
+	row := q.db.QueryRowContext(ctx, upgradetoChirpyRed, id)
+	var is_chirpy_red bool
+	err := row.Scan(&is_chirpy_red)
+	return is_chirpy_red, err
+}
+
+const userByEmail = `-- name: UserByEmail :one
+select id, created_at, updated_at, email, hashed_password, is_chirpy_red
+from users
+where email = $1
+`
+
+func (q *Queries) UserByEmail(ctx context.Context, email string) (User, error) {
+	row := q.db.QueryRowContext(ctx, userByEmail, email)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Email,
+		&i.HashedPassword,
+		&i.IsChirpyRed,
 	)
 	return i, err
 }
 
 const userRefreshTokenThing = `-- name: UserRefreshTokenThing :one
-select users.id, users.created_at, users.updated_at, users.email, users.hashed_password
+select users.id, users.created_at, users.updated_at, users.email, users.hashed_password, users.is_chirpy_red
 from users inner join refresh_tokens on users.id = refresh_tokens.user_id
 where refresh_tokens.token=$1
 and revoked_at is null
@@ -223,25 +258,7 @@ func (q *Queries) UserRefreshTokenThing(ctx context.Context, token string) (User
 		&i.UpdatedAt,
 		&i.Email,
 		&i.HashedPassword,
-	)
-	return i, err
-}
-
-const userbyEmail = `-- name: UserbyEmail :one
-select id, created_at, updated_at, email, hashed_password
-from users
-where email = $1
-`
-
-func (q *Queries) UserbyEmail(ctx context.Context, email string) (User, error) {
-	row := q.db.QueryRowContext(ctx, userbyEmail, email)
-	var i User
-	err := row.Scan(
-		&i.ID,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.Email,
-		&i.HashedPassword,
+		&i.IsChirpyRed,
 	)
 	return i, err
 }
